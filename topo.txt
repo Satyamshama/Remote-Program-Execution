@@ -1,0 +1,7 @@
+# Format: numClients numServers
+3 5
+# Client connections (client_id connected_client_ids)
+0 1,2
+1 0,2
+2 0,1
+# Server connections (all clients connect to all servers)
