@@ -3,7 +3,6 @@
 #include <sstream>
 
 using namespace omnetpp;
-using namespace std;
 
 class NetworkBuilder : public cSimpleModule
 {
@@ -16,31 +15,89 @@ Define_Module(NetworkBuilder);
 void NetworkBuilder::initialize()
 {
     // Read topology from file
-    ifstream topoFile("topo.txt");
-    string line;
-    int numClients, numServers;
-
-    // Skip comments
-    while (std::getline(topoFile, line)) {
-        if (line[0] != '#') break;
+    std::ifstream topoFile("topo.txt");
+    if (!topoFile.is_open()) {
+        throw cRuntimeError("Failed to open topo.txt!");
     }
 
-    // Parse number of clients and servers
-    istringstream iss(line);
-    iss >> numClients >> numServers;
+    int numClients, numServers;
+    if (!(topoFile >> numClients >> numServers)) {
+        throw cRuntimeError("Invalid format in topo.txt!");
+    }
 
-    // Create network
-    cModuleType *networkType = cModuleType::get("remoteexecution.RemoteExecutionNetwork");
-    cModule *network = networkType->create("network", nullptr);
+    // Create client modules
+    cModuleType *clientType = cModuleType::get("remoteexecution.ClientNode");
+    for (int i = 0; i < numClients; i++) {
+        cModule *client = clientType->create("client", getParentModule(), i);
+        if (!client) throw cRuntimeError("Failed to create client %d", i);
+        client->par("nodeId") = i;
+        client->finalizeParameters();
+        client->buildInside();
+    }
 
-    // Set parameters
-    network->par("numClients") = numClients;
-    network->par("numServers") = numServers;
+    // Create server modules
+    cModuleType *serverType = cModuleType::get("remoteexecution.ServerNode");
+    for (int i = 0; i < numServers; i++) {
+        cModule *server = serverType->create("server", getParentModule(), i);
+        if (!server) throw cRuntimeError("Failed to create server %d", i);
+        server->par("nodeId") = i;
+        server->finalizeParameters();
+        server->buildInside();
+    }
 
-    // Build the network
-    network->buildInside();
-    network->callInitialize();
+    // Set gate sizes for clients and servers
+    for (int i = 0; i < numClients; i++) {
+        cModule *client = getParentModule()->getSubmodule("client", i);
+        client->setGateSize("out", numServers + numClients - 1); // Servers + other clients
+        client->setGateSize("in", numServers + numClients - 1);  // Servers + other clients
+    }
 
-    EV << "Network built with " << numClients << " clients and "
-       << numServers << " servers" << endl;
+    for (int i = 0; i < numServers; i++) {
+        cModule *server = getParentModule()->getSubmodule("server", i);
+        server->setGateSize("in", numClients);
+        server->setGateSize("out", numClients);
+    }
+
+    // Connect clients to servers
+    for (int i = 0; i < numClients; i++) {
+        cModule *client = getParentModule()->getSubmodule("client", i);
+        for (int j = 0; j < numServers; j++) {
+            cModule *server = getParentModule()->getSubmodule("server", j);
+            client->gate("out", j)->connectTo(server->gate("in", i));
+            server->gate("out", i)->connectTo(client->gate("in", j));
+        }
+    }
+
+    // Connect clients to other clients
+    for (int i = 0; i < numClients; i++) {
+        cModule *clientA = getParentModule()->getSubmodule("client", i);
+        for (int j = 0; j < numClients; j++) {
+            if (i != j) {
+                cModule *clientB = getParentModule()->getSubmodule("client", j);
+                int gateIndex = numServers + (j < i ? j : j - 1);
+                clientA->gate("out", gateIndex)->connectTo(clientB->gate("in", numServers + (i < j ? i : i - 1)));
+            }
+        }
+    }
+
+    // Debug output
+    for (int i = 0; i < numClients; i++) {
+        cModule *client = getParentModule()->getSubmodule("client", i);
+        EV << "Client " << i << " gate sizes - in: " << client->gateSize("in")
+           << ", out: " << client->gateSize("out") << endl;
+    }
+
+    for (int i = 0; i < numServers; i++) {
+        cModule *server = getParentModule()->getSubmodule("server", i);
+        EV << "Server " << i << " gate sizes - in: " << server->gateSize("in")
+           << ", out: " << server->gateSize("out") << endl;
+    }
+
+    // Initialize all modules
+    for (int i = 0; i < numClients; i++) {
+        getParentModule()->getSubmodule("client", i)->callInitialize();
+    }
+    for (int i = 0; i < numServers; i++) {
+        getParentModule()->getSubmodule("server", i)->callInitialize();
+    }
 }

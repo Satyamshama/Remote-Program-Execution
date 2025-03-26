@@ -90,29 +90,36 @@ void ClientNode::setupConnections()
 {
     // Read topology from file
     std::ifstream topoFile("topo.txt");
+    if (!topoFile.is_open()) {
+        throw cRuntimeError("Cannot open topo.txt");
+    }
+
+    // Parse numClients and numServers
     std::string line;
-
-    // Skip comments
-    while (std::getline(topoFile, line)) {
-        if (line[0] != '#') break;
-    }
-
-    // Parse number of clients and servers
+    while (std::getline(topoFile, line) && line[0] == '#');
     std::istringstream iss(line);
-    iss >> numClients >> numServers;
-
-    // Skip client connections for now (we'll implement this later)
-    while (std::getline(topoFile, line)) {
-        if (line[0] != '#') break;
+    if (!(iss >> numClients >> numServers)) {
+        throw cRuntimeError("Invalid topology format");
     }
 
-    // For now, just connect this client to all servers
     cModule *network = getParentModule();
+
+    // Set gate sizes FIRST
+    int totalGates = numServers + numClients; // Servers + clients
+    setGateSize("out", totalGates);
+    setGateSize("in", totalGates);
+
+    // Connect to servers
     for (int i = 0; i < numServers; i++) {
+        cModule *server = network->getSubmodule("server", i);
+        if (!server) {
+            EV_ERROR << "Server " << i << " not found!" << endl;
+            continue;
+        }
+
         cGate *outGate = gate("out", i);
         cGate *inGate = gate("in", i);
 
-        cModule *server = network->getSubmodule("server", i);
         cGate *serverInGate = server->gate("in", nodeId);
         cGate *serverOutGate = server->gate("out", nodeId);
 
@@ -120,13 +127,20 @@ void ClientNode::setupConnections()
         serverOutGate->connectTo(inGate);
     }
 
-    // Connect to other clients for gossip
+    // Connect to other clients
     for (int i = 0; i < numClients; i++) {
         if (i != nodeId) {
-            cGate *outGate = gate("out", numServers + i);
-            cGate *inGate = gate("in", numServers + i);
+            int gateIndex = numServers + i; // Separate range for client connections
 
             cModule *otherClient = network->getSubmodule("client", i);
+            if (!otherClient) {
+                EV_ERROR << "Client " << i << " not found!" << endl;
+                continue;
+            }
+
+            cGate *outGate = gate("out", gateIndex);
+            cGate *inGate = gate("in", gateIndex);
+
             cGate *otherInGate = otherClient->gate("in", numServers + nodeId);
             cGate *otherOutGate = otherClient->gate("out", numServers + nodeId);
 
@@ -135,6 +149,7 @@ void ClientNode::setupConnections()
         }
     }
 }
+
 
 void ClientNode::handleMessage(cMessage *msg)
 {
@@ -262,7 +277,8 @@ void ClientNode::processResult(ResultMessage *msg)
     int subtaskId = msg->getSubtaskId();
     int serverId = msg->getArrivalGate()->getIndex();
     int result = msg->getResult();
-    bool isHonest = msg->getisHonest();
+    bool isHonest = msg->isHonest();
+
 
 
 
